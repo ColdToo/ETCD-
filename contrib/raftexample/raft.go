@@ -51,12 +51,13 @@ type raftNode struct {
 	commitC chan<- *commit // entries committed to log (k,v)
 	errorC  chan<- error   // errors from raft session
 
-	id          int      // client ID for raft session
-	peers       []string // raft peer URLs
-	join        bool     // node is joining an existing cluster
-	waldir      string   // path to WAL directory
-	snapdir     string   // path to snapshot directory
-	getSnapshot func() ([]byte, error)
+	id    int      // client ID for raft session
+	peers []string // raft peer URLs
+	join  bool     // node is joining an existing cluster
+	// raftlog是存储在内存中的，持久化依赖于wal和snapshot
+	waldir      string                 // path to WAL directory
+	snapdir     string                 // path to snapshot directory
+	getSnapshot func() ([]byte, error) //获取内存快照的函数
 
 	confState     raftpb.ConfState
 	snapshotIndex uint64
@@ -69,10 +70,10 @@ type raftNode struct {
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
 
-	snapshotter      *snap.Snapshotter
+	snapshotter      *snap.Snapshotter      //快照管理器
 	snapshotterReady chan *snap.Snapshotter // signals when snapshotter is ready
 
-	snapCount uint64
+	snapCount uint64 //快照数量
 	transport *rafthttp.Transport
 	stopc     chan struct{} // signals proposal channel closed
 	httpstopc chan struct{} // signals http server to shutdown
@@ -81,6 +82,7 @@ type raftNode struct {
 	logger *zap.Logger
 }
 
+// 默认许可的快照数量
 var defaultSnapshotCount uint64 = 10000
 
 // newRaftNode initiates a raft instance and returns a committed log entry
@@ -117,6 +119,7 @@ func newRaftNode(id int, peers []string, join bool, getSnapshot func() ([]byte, 
 		snapshotterReady: make(chan *snap.Snapshotter, 1),
 		// rest of structure populated after WAL replay
 	}
+	//异步初始化剩余部分
 	go rc.startRaft()
 	return commitC, errorC, rc.snapshotterReady
 }
@@ -208,7 +211,9 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 	return applyDoneC, true
 }
 
+// todo 深入阅读loadSnapshot
 func (rc *raftNode) loadSnapshot() *raftpb.Snapshot {
+	// 如果存在wal日志文件那么从wal日志文件中加载有效的快照
 	if wal.Exist(rc.waldir) {
 		walSnaps, err := wal.ValidSnapshotEntries(rc.logger, rc.waldir)
 		if err != nil {
@@ -220,6 +225,7 @@ func (rc *raftNode) loadSnapshot() *raftpb.Snapshot {
 		}
 		return snapshot
 	}
+
 	return &raftpb.Snapshot{}
 }
 
@@ -251,6 +257,7 @@ func (rc *raftNode) openWAL(snapshot *raftpb.Snapshot) *wal.WAL {
 }
 
 // replayWAL replays WAL entries into the raft instance.
+// 将最新的log加入到内存中，其余的放入wal日志文件中
 func (rc *raftNode) replayWAL() *wal.WAL {
 	log.Printf("replaying WAL of member %d", rc.id)
 	snapshot := rc.loadSnapshot()
@@ -259,6 +266,7 @@ func (rc *raftNode) replayWAL() *wal.WAL {
 	if err != nil {
 		log.Fatalf("raftexample: failed to read WAL (%v)", err)
 	}
+
 	rc.raftStorage = raft.NewMemoryStorage()
 	if snapshot != nil {
 		rc.raftStorage.ApplySnapshot(*snapshot)
@@ -280,23 +288,16 @@ func (rc *raftNode) writeError(err error) {
 }
 
 func (rc *raftNode) startRaft() {
-	//如果没有快照文件夹那么先创建一个快照文件夹
+	//创建一个快照管理器
 	if !fileutil.Exist(rc.snapdir) {
 		if err := os.Mkdir(rc.snapdir, 0750); err != nil {
 			log.Fatalf("raftexample: cannot create dir for snapshot (%v)", err)
 		}
 	}
-	//快照文件夹（带日志记录）
 	rc.snapshotter = snap.New(zap.NewExample(), rc.snapdir)
 
-	//是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
-	oldwal := wal.Exist(rc.waldir)
-
-	// raftNode.replayWAL() 方法首先会读取快照数据，
-	//在快照数据中记录了该快照包含的最后一条 Entry 记录的 Term 值 和 索引值。
-	//然后根据 Term 值 和 索引值确定读取 WAL 日志文件的位置， 并进行日志记录的读取。
+	// 从快照中回放wal日志文件以及内存数据结构
 	rc.wal = rc.replayWAL()
-
 	// signal replay has finished
 	rc.snapshotterReady <- rc.snapshotter
 
@@ -318,13 +319,16 @@ func (rc *raftNode) startRaft() {
 
 	// 初始化底层的 etcd-raft 模块，这里会根据 WAL 日志的回放情况，
 	// 判断当前节点是首次启动还是重新启动
+	//是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
+	// todo 启动节点
+	oldwal := wal.Exist(rc.waldir)
 	if oldwal || rc.join {
 		rc.node = raft.RestartNode(c)
 	} else {
 		rc.node = raft.StartNode(c, rpeers)
 	}
 
-	//Transport 实例，负责raft节点之间的网络通信服务
+	//创建一个Transport 实例，负责raft节点之间的网络通信服务
 	rc.transport = &rafthttp.Transport{
 		Logger:      rc.logger,
 		ID:          types.ID(rc.id),

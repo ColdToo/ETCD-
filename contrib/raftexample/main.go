@@ -28,22 +28,24 @@ func main() {
 	join := flag.Bool("join", false, "join an existing cluster")
 	flag.Parse()
 
-	//用于接收客户端发送的消息
+	//proposeC和confChangeC
 	proposeC := make(chan string)
 	defer close(proposeC)
-	//用于接收客户端发送的配置消息
 	confChangeC := make(chan raftpb.ConfChange)
 	defer close(confChangeC)
 
 	// raft provides a commit stream for the proposals from the http api
 	var kvs *kvstore
 
-	//获取当前内存（map）的快照的函数
+	//获取当前内存数据快照的函数
 	getSnapshot := func() ([]byte, error) { return kvs.getSnapshot() }
+
+	//初始化节点
 	commitC, errorC, snapshotterReady := newRaftNode(*id, strings.Split(*cluster, ","), *join, getSnapshot, proposeC, confChangeC)
 
+	//初始化kv存储
 	kvs = newKVStore(<-snapshotterReady, proposeC, commitC, errorC)
 
-	// the key-value http handler will propose updates to raft
+	//the key-value http handler will propose updates to raft
 	serveHttpKVAPI(kvs, *kvport, confChangeC, errorC)
 }

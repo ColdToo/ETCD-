@@ -26,7 +26,7 @@ import (
 )
 
 // a key-value store backed by raft
-// kvstore 是一个乞丐版的键值对存储模块，用于以小见大，
+// kvstore 是一个乞丐版的键值对存储模块
 // 模拟还原 etcd 存储系统与 raft 节点间的交互模式.
 type kvstore struct {
 	proposeC    chan<- string // channel for proposing updates

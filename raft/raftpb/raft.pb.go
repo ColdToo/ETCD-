@@ -73,10 +73,10 @@ type MessageType int32
 
 const (
 	//选举
-	MsgHup            MessageType = 0
-	MsgBeat           MessageType = 1
+	MsgHup  MessageType = 0
+	MsgBeat MessageType = 1
 	//消息的提议
-	MsgProp           MessageType = 2
+	MsgProp MessageType = 2
 	//日志的复制
 	MsgApp            MessageType = 3
 	MsgAppResp        MessageType = 4
@@ -345,6 +345,7 @@ func (m *SnapshotMetadata) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_SnapshotMetadata proto.InternalMessageInfo
 
+// 快照数据以及元数据
 type Snapshot struct {
 	Data     []byte           `protobuf:"bytes,1,opt,name=data" json:"data,omitempty"`
 	Metadata SnapshotMetadata `protobuf:"bytes,2,opt,name=metadata" json:"metadata"`
@@ -383,14 +384,14 @@ func (m *Snapshot) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Snapshot proto.InternalMessageInfo
 
-//Type：消息类型，宏观上分为请求和响应两大类（结尾带 Resp）；
-//根据流程主线又可以分为日志同步、leader 选举、心跳广播、读请求四类；
+// Type：消息类型，宏观上分为请求和响应两大类（结尾带 Resp）；
+// 根据流程主线又可以分为日志同步、leader 选举、心跳广播、读请求四类；
 type Message struct {
 	Type MessageType `protobuf:"varint,1,opt,name=type,enum=raftpb.MessageType" json:"type"`
 	To   uint64      `protobuf:"varint,2,opt,name=to" json:"to"`
 	From uint64      `protobuf:"varint,3,opt,name=from" json:"from"`
 	//节点的任期
-	Term uint64      `protobuf:"varint,4,opt,name=term" json:"term"`
+	Term uint64 `protobuf:"varint,4,opt,name=term" json:"term"`
 	// logTerm is generally used for appending Raft logs to followers. For example,
 	// (type=MsgApp,index=100,logTerm=5) means leader appends entries starting at
 	// index=101, and the term of entry at index 100 is 5.
@@ -398,19 +399,19 @@ type Message struct {
 	// entries from its leader as it already has an entry with term 5 at index 100.
 
 	//拟同步日志和前一条日志的标识
-	LogTerm    uint64   `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
-	Index      uint64   `protobuf:"varint,6,opt,name=index" json:"index"`
+	LogTerm uint64 `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
+	Index   uint64 `protobuf:"varint,6,opt,name=index" json:"index"`
 	//需要被其他节点认可的日志
-	Entries    []Entry  `protobuf:"bytes,7,rep,name=entries" json:"entries"`
+	Entries []Entry `protobuf:"bytes,7,rep,name=entries" json:"entries"`
 
 	//已提交索引的日志
-	Commit     uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"`
-	Snapshot   Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
+	Commit   uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"`
+	Snapshot Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
 
 	//节点是否拒绝同步日志，以及该节点上最后一条日志的索引
-	Reject     bool     `protobuf:"varint,10,opt,name=reject" json:"reject"`
-	RejectHint uint64   `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
-	Context    []byte   `protobuf:"bytes,12,opt,name=context" json:"context,omitempty"`
+	Reject     bool   `protobuf:"varint,10,opt,name=reject" json:"reject"`
+	RejectHint uint64 `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
+	Context    []byte `protobuf:"bytes,12,opt,name=context" json:"context,omitempty"`
 }
 
 func (m *Message) Reset()         { *m = Message{} }
