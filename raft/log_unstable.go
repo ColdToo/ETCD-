@@ -20,13 +20,14 @@ import pb "go.etcd.io/etcd/raft/v3/raftpb"
 // Note that unstable.offset may be less than the highest log
 // position in storage; this means that the next write to storage
 // might need to truncate the log before persisting unstable.entries.
+// 提供了未持久化预写日志代理能力，可读可写
 type unstable struct {
 	// the incoming unstable snapshot, if any.
 	snapshot *pb.Snapshot
-	// all entries that have not yet been written to storage.
-	// offset用于保存entries数组中的数据的起始index
+	//entries 是还未持久化的预写日志列表
 	entries []pb.Entry
-	offset  uint64
+	// offset 是首笔未持久化预写日志在全局预写日志中的索引偏移量.
+	offset uint64
 
 	logger Logger
 }

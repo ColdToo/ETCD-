@@ -49,31 +49,38 @@ type raftNode struct {
 
 	//用于将已提交的日志应用到数据状态机
 	commitC chan<- *commit // entries committed to log (k,v)
-	errorC  chan<- error   // errors from raft session
+	errorC  chan<- error   // 用来将错误报告给其它组件的信道。
 
-	id    int      // client ID for raft session
-	peers []string // raft peer URLs
-	join  bool     // node is joining an existing cluster
-	// raftlog是存储在内存中的，持久化依赖于wal和snapshot
-	waldir      string                 // path to WAL directory
-	snapdir     string                 // path to snapshot directory
-	getSnapshot func() ([]byte, error) //获取内存快照的函数
+	id      int      // client ID for raft session
+	peers   []string // raft peer URLs
+	join    bool     // 如果该节点是以加入已有集群的方式启动，那么该值为true；否则是false。
+	waldir  string   // path to WAL directory
+	snapdir string   // path to snapshot directory
 
-	confState     raftpb.ConfState
+	//获取当前内存map快照的函数
+	getSnapshot func() ([]byte, error)
+
+	// 集群配置状态
+	confState raftpb.ConfState
+	// 快照中的状态下最后一条日志的索引。
 	snapshotIndex uint64
 	appliedIndex  uint64
 
-	// raft backing for the commit/error channel
 	// 算法层入口
 	node raft.Node
 
+	//预写日志持久化模块
 	raftStorage *raft.MemoryStorage
 	wal         *wal.WAL
 
-	snapshotter      *snap.Snapshotter      //快照管理器
+	//快照管理器
+	snapshotter      *snap.Snapshotter
 	snapshotterReady chan *snap.Snapshotter // signals when snapshotter is ready
 
-	snapCount uint64 //快照数量
+	//当wal中的日志超过该值时，触发快照操作并压缩日志。
+	snapCount uint64
+
+	//http服务
 	transport *rafthttp.Transport
 	stopc     chan struct{} // signals proposal channel closed
 	httpstopc chan struct{} // signals http server to shutdown
@@ -258,6 +265,7 @@ func (rc *raftNode) openWAL(snapshot *raftpb.Snapshot) *wal.WAL {
 
 // replayWAL replays WAL entries into the raft instance.
 // 将最新的log加入到内存中，其余的放入wal日志文件中
+// todo 从快照中加载Entry 一部分放在wal中另一部分放在memoryStorage中
 func (rc *raftNode) replayWAL() *wal.WAL {
 	log.Printf("replaying WAL of member %d", rc.id)
 	snapshot := rc.loadSnapshot()
@@ -317,9 +325,9 @@ func (rc *raftNode) startRaft() {
 		MaxUncommittedEntriesSize: 1 << 30,
 	}
 
-	// 初始化底层的 etcd-raft 模块，这里会根据 WAL 日志的回放情况，
+	// 初始化底层的etcd-raft 模块，这里会根据WAL日志的回放情况，
 	// 判断当前节点是首次启动还是重新启动
-	//是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
+	// 是否存在旧的WAL日志,用于判断该节点是首次加入还是重启的节点
 	// todo 启动节点
 	oldwal := wal.Exist(rc.waldir)
 	if oldwal || rc.join {
@@ -348,6 +356,7 @@ func (rc *raftNode) startRaft() {
 
 	// 启动一个goroutine，其中会监听当前节点与集群中其他节点之间的网络连接
 	go rc.serveRaft()
+
 	// 启动后台 goroutine 处理上层应用与底层 etcd-raft 模块的交互
 	go rc.serveChannels()
 }
@@ -446,6 +455,7 @@ func (rc *raftNode) serveChannels() {
 
 		for rc.proposeC != nil && rc.confChangeC != nil {
 			select {
+			// 监听到proposeC中有数据
 			case prop, ok := <-rc.proposeC:
 				if !ok {
 					rc.proposeC = nil
@@ -506,6 +516,7 @@ func (rc *raftNode) serveChannels() {
 	}
 }
 
+// todo
 func (rc *raftNode) serveRaft() {
 	url, err := url.Parse(rc.peers[rc.id-1])
 	if err != nil {
@@ -523,6 +534,8 @@ func (rc *raftNode) serveRaft() {
 	default:
 		log.Fatalf("raftexample: Failed to serve rafthttp (%v)", err)
 	}
+
+	//httpdonec表明http服务已经完成
 	close(rc.httpdonec)
 }
 

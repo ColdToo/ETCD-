@@ -251,17 +251,19 @@ type raft struct {
 
 	readStates []ReadState
 
-	// the log
+	//预写日志管理模块
 	raftLog *raftLog
 
 	maxMsgSize         uint64
 	maxUncommittedSize uint64
-	// TODO(tbg): rename to trk.
+
 	prs tracker.ProgressTracker
 
+	//节点的角色：follower master candidate
 	state StateType
 
 	// isLearner is true if the local raft node is a learner.
+	// learner是一个新的角色
 	isLearner bool
 
 	msgs []pb.Message
@@ -271,28 +273,15 @@ type raft struct {
 	// leadTransferee is id of the leader transfer target when its value is not zero.
 	// Follow the procedure defined in raft thesis 3.10.
 	leadTransferee uint64
-	// Only one conf change may be pending (in the log, but not yet
-	// applied) at a time. This is enforced via pendingConfIndex, which
-	// is set to a value >= the log index of the latest pending
-	// configuration change (if any). Config changes are only allowed to
-	// be proposed if the leader's applied index is greater than this
-	// value.
+
 	pendingConfIndex uint64
-	// an estimate of the size of the uncommitted tail of the Raft log. Used to
-	// prevent unbounded log growth. Only maintained by the leader. Reset on
-	// term changes.
+
 	uncommittedSize uint64
 
 	readOnly *readOnly
 
-	// number of ticks since it reached last electionTimeout when it is leader
-	// or candidate.
-	// number of ticks since it reached last electionTimeout or received a
-	// valid message from current leader when it is a follower.
 	electionElapsed int
 
-	// number of ticks since it reached last heartbeatTimeout.
-	// only leader keeps heartbeatElapsed.
 	heartbeatElapsed int
 
 	//Check Quorum 是针对这种情况：当 Leader 被网络分区的时，其他实例已经选举出了新的 Leader，旧 Leader 不能收到新 Leader 的消息，
@@ -301,23 +290,19 @@ type raft struct {
 	checkQuorum bool
 	preVote     bool
 
-	heartbeatTimeout int
-	electionTimeout  int
-	// randomizedElectionTimeout is a random number between
-	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
-	// when raft changes its state to follower or candidate.
+	heartbeatTimeout          int
+	electionTimeout           int
 	randomizedElectionTimeout int
 	disableProposalForwarding bool
 
+	// 当心跳超时的时候调用，不同角色的tick函数不同
 	tick func()
+
+	//处理Message消息
 	step stepFunc
 
 	logger Logger
 
-	// pendingReadIndexMessages is used to store messages of type MsgReadIndex
-	// that can't be answered as new leader didn't committed any log in
-	// current term. Those will be handled as fast as first log is committed in
-	// current term.
 	pendingReadIndexMessages []pb.Message
 }
 

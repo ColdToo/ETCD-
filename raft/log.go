@@ -21,26 +21,23 @@ import (
 	pb "go.etcd.io/etcd/raft/v3/raftpb"
 )
 
-//预写日志产生时，需要经历一个未持久化（内存）-> 已持久化（磁盘）的过程，前者在算法层内由 raftLog.unstable 完成，
-//持久化在应用层内完成，算法层通过 raftLog.storage 这个接口提供已持久化预写日志的查询能力.
+// 预写日志产生时，需要经历一个未持久化（内存）-> 已持久化（磁盘）的过程，前者在算法层内由 raftLog.unstable 完成，
+// 持久化在应用层内完成，算法层通过 raftLog.storage 这个接口提供已持久化预写日志的查询能力.
 type raftLog struct {
 	// storage contains all stable entries since the last snapshot.
-	// 用于保存自从最后一次snapshot之后提交的数据
+	// 持久化预写日志
 	storage Storage
 
 	// unstable contains all unstable entries and snapshot.
 	// they will be saved into storage.
-	// 用于保存还没有持久化的数据和快照，这些数据最终都会保存到storage中
+	// 用于保存还没有持久化的数据和快照
 	unstable unstable
 
 	// committed is the highest log position that is known to be in
 	// stable storage on a quorum of nodes.
-	// committed数据索引
+	// 最后一个已提交日志的索引
 	committed uint64
 
-	// applied is the highest log position that the application has
-	// been instructed to apply to its state machine.
-	// Invariant: applied <= committed
 	// committed保存是写入持久化存储中的最高index，而applied保存的是传入状态机中的最高index
 	// 即一条日志首先要提交成功（即committed），才能被applied到状态机中
 	// 因此以下不等式一直成立：applied <= committed

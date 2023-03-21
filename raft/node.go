@@ -50,47 +50,27 @@ func (a *SoftState) equal(b *SoftState) bool {
 // be saved to stable storage, committed or sent to other peers.
 // All fields in Ready are read-only.
 type Ready struct {
-	// The current volatile state of a Node.
-	// SoftState will be nil if there is no update.
-	// It is not required to consume or store SoftState.
-	// 软状态是异变的，包括：当前集群leader、当前节点状态
+	// 软状态是易变的，包括：当前集群leader、当前节点状态
 	*SoftState
 
-	// The current state of a Node to be saved to stable storage BEFORE
-	// Messages are sent.
-	// HardState will be equal to empty state if there is no update.
 	// 硬状态需要被保存，包括：节点当前Term、Vote、Commit
-	// 如果当前这部分没有更新，则等于空状态
 	// raft 节点的当前任期、投票归属和已提交日志索引，
 	// 这些信息都需要持久化存储，节点宕机后重启亦可恢复如初；
 	pb.HardState
 
-	// ReadStates can be used for node to serve linearizable read requests locally
-	// when its applied index is greater than the index in ReadState.
-	// Note that the readState will be returned when raft receives msgReadIndex.
-	// The returned is only valid for the request that requested to read.
-	// 需要在消息发送之前被写入到持久化存储中的entries数据数组
+	// 主要用来实现线性读功能
 	ReadStates []ReadState
 
-	// Entries specifies entries to be saved to stable storage BEFORE
-	// Messages are sent.
 	// 本轮算法层产生的预写日志，此时还未持久化，需要传输到应用层，由应用层完成持久化.
 	Entries []pb.Entry
 
-	// Snapshot specifies the snapshot to be saved to stable storage.
 	// 需要被持久化的快照
 	Snapshot pb.Snapshot
 
-	// CommittedEntries specifies entries to be committed to a
-	// store/state-machine. These have previously been committed to stable
-	// store.
-	// 已经被comitted的entries可以应用于状态机中（持久化）
+	// 已经被提交的日志可以应用于数据状态机中
 	CommittedEntries []pb.Entry
 
-	// Messages specifies outbound messages to be sent AFTER Entries are
-	// committed to stable storage.
-	// If it contains a MsgSnap message, the application MUST report back to raft
-	// when the snapshot has been received or has failed by calling ReportSnapshot.
+	// 本轮算法层需要发出的消息，由应用层调用网络通信模块发出.
 	Messages []pb.Message
 
 	// MustSync indicates whether the HardState and Entries must be synchronously
@@ -135,16 +115,15 @@ func (rd Ready) appliedCursor() uint64 {
 // Node 是算法层中 raft 节点的抽象，也是应用层与算法层交互的唯一入口，应用层持有Node 作为算法层 raft 节点的引用，
 // 通过调用 Node 接口的几个 api，完成与算法层的 channel 通信.
 type Node interface {
-	// Tick increments the internal logical clock for the Node by a single tick. Election
-	// timeouts and heartbeat timeouts are in units of ticks.
-	// Tick：传送定时驱动信号，每次调用 Tick 方法的时间间隔是固定的，称为一个 tick，是 raft 节点的最小计时单位，
+	// Tick ：传送定时驱动信号，每次调用 Tick 方法的时间间隔是固定的，称为一个 tick，是 raft 节点的最小计时单位，
 	// 后续 leader 节点的心跳计时和 leader/candidate 的选举计时也都是以 tick 作为时间单位；
-	//实际上，该方法为应用层向 node.tickc channel 中传入一个信号，而算法层的 goroutine 是处于时刻监听该 channel 状态的，
-	//获取到信号后就会驱动 raft 节点进行定时函数处理；
-	//对于 leader 而言，定时函数中的任务是要向集群中的其他节点广播心跳；对于 follower 和 candidate 而言，定时函数的任务是发起竞选；
-	//此外，对于不同角色，在接收到消息时的处理模式也不尽相同，这部分区别会在角色专属的状态机函数中体现.
-	//Node实现了Tick方法，该方法主要是用于调用RawNode中的Tick方法，RawNode中的Tick方法会根据节点的不同角色从而调用不同的Tick方法
+	// 实际上，该方法为应用层向 node.tickc channel 中传入一个信号，而算法层的 goroutine 是处于时刻监听该 channel 状态的，
+	// 获取到信号后就会驱动 rawNode 进行定时函数处理；
+	// 对于 leader 而言，定时函数中的任务是要向集群中的其他节点广播心跳；对于 follower 和 candidate 而言，定时函数的任务是发起竞选；
+	// 此外，对于不同角色，在接收到消息时的处理模式也不尽相同，这部分区别会在角色专属的状态机函数中体现.
+	// node实现了Tick方法，该方法主要是用于调用RawNode中的Tick方法，RawNode中的Tick方法会根据节点的不同角色从而调用不同的Tick方法
 	Tick()
+
 	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
 	Campaign(ctx context.Context) error
 
@@ -153,89 +132,43 @@ type Node interface {
 	// 应用层调用 Node.Propose 方法，向算法层发起一笔写数据的请求.
 	Propose(ctx context.Context, data []byte) error
 
-	// ProposeConfChange proposes a configuration change. Like any proposal, the
-	// configuration change may be dropped with or without an error being
-	// returned. In particular, configuration changes are dropped unless the
-	// leader has certainty that there is no prior unapplied configuration
-	// change in its log.
-	//
-	// The method accepts either a pb.ConfChange (deprecated) or pb.ConfChangeV2
-	// message. The latter allows arbitrary configuration changes via joint
-	// consensus, notably including replacing a voter. Passing a ConfChangeV2
-	// message is only allowed if all Nodes participating in the cluster run a
-	// version of this library aware of the V2 API. See pb.ConfChangeV2 for
-	// usage details and semantics.
-	// 应用层调用 Propose 方法，最终会往 node.propc channel 中传入一条类型为 MsgProp 的消息.
-	// 算法层 goroutine 通过读 channel 获取到消息后，会驱动 raft 节点进入写请求提议流程.
+	// ProposeConfChange 应用层通过该方法提议配置更改
 	ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
 
 	// Step advances the state machine using the given message. ctx.Err() will be returned, if any.
 	// 应用层调用 Node.Step 方法，可以向算法层 goroutine 传送一条自由指定类型的消息，但类型不能是 MsgHup（驱动本节点进行选举）或者
-	//MsgBeat（驱动本 leader 节点进行心跳广播），因为这些动作应该是由定时器驱动，而非人为调用.
+	// MsgBeat（驱动本 leader 节点进行心跳广播），因为这些动作应该是由定时器驱动，而非人为调用.
 	Step(ctx context.Context, msg pb.Message) error
 
-	// Ready returns a channel that returns the current point-in-time state.
-	// Users of the Node must call Advance after retrieving the state returned by Ready.
-	//
-	// NOTE: No committed entries from the next Ready may be applied until all committed entries
-	// and snapshots from the previous one have finished.
 	// 应用层调用 Node.Ready 方法返回 node.readyc channel 用于监听，当应用层从 readyc 中读取到 Ready 信号时，说明算法层已经产生了新一轮的处理结果，应用层需要进行响应处理；
 	// 当应用层处理完毕后，需要调用 Node.Advance 方法，通过向 node.advancec channel 中发送信号的方式，示意应用层已处理完毕，算法层可以进入下一轮调度循环.
 	// 因此，Node.Ready 和 Node.Advance 方法是成对使用的，当两个方法各被调用一次，意味着应用层与算法层之间完成了一轮交互，紧接着会开启下一轮，周而复始，循环往复.
 
 	Ready() <-chan Ready
 
-	// Advance notifies the Node that the application has saved progress up to the last Ready.
-	// It prepares the node to return the next available Ready.
-	//
-	// The application should generally call Advance after it applies the entries in last Ready.
-	//
-	// However, as an optimization, the application may call Advance while it is applying the
-	// commands. For example. when the last Ready contains a snapshot, the application might take
-	// a long time to apply the snapshot data. To continue receiving Ready without blocking raft
-	// progress, it can call Advance before finishing applying the last ready.
 	Advance()
-	// ApplyConfChange applies a config change (previously passed to
-	// ProposeConfChange) to the node. This must be called whenever a config
-	// change is observed in Ready.CommittedEntries, except when the app decides
-	// to reject the configuration change (i.e. treats it as a noop instead), in
-	// which case it must not be called.
-	//
-	// Returns an opaque non-nil ConfState protobuf which must be recorded in
-	// snapshots.
-	//应用层调用该方法，通过 node.propc hannel 向算法层发送一则消息类型为 MsgProp、日志类型为 EntryConfChange 的消息，
-	//推动 raft 节点进入配置变更流程.
+
+	// ApplyConfChange 应用层调用该方法，通过 node.propcc 向算法层发送一则消息类型为 MsgProp、日志类型为 EntryConfChange 的消息，
+	// 推动 raft 节点进入配置变更流程.
 	ApplyConfChange(cc pb.ConfChangeI) *pb.ConfState
 
 	// TransferLeadership attempts to transfer leadership to the given transferee.
 	TransferLeadership(ctx context.Context, lead, transferee uint64)
 
-	// ReadIndex request a read state. The read state will be set in the ready.
-	// Read state has a read index. Once the application advances further than the read
-	// index, any linearizable read requests issued before the read request can be
-	// processed safely. The read state will have the same rctx attached.
-	// Note that request can be lost without notice, therefore it is user's job
-	// to ensure read index retries.
-	// 应用层调用 node.ReadIndex 方法向算法层发起读数据请求.
+	// ReadIndex 应用层调用 node.ReadIndex 方法向算法层发起读数据请求.
 	// 实际上会往 node.recvc channel 中传入一条类型为 MsgReadIndex 的消息.
 	ReadIndex(ctx context.Context, rctx []byte) error
 
 	// Status returns the current status of the raft state machine.
 	Status() Status
 	// ReportUnreachable reports the given node is not reachable for the last send.
+	// 告诉算法层节点不可达
 	ReportUnreachable(id uint64)
-	// ReportSnapshot reports the status of the sent snapshot. The id is the raft ID of the follower
-	// who is meant to receive the snapshot, and the status is SnapshotFinish or SnapshotFailure.
-	// Calling ReportSnapshot with SnapshotFinish is a no-op. But, any failure in applying a
-	// snapshot (for e.g., while streaming it from leader to follower), should be reported to the
-	// leader with SnapshotFailure. When leader sends a snapshot to a follower, it pauses any raft
-	// log probes until the follower can apply the snapshot and advance its state. If the follower
-	// can't do that, for e.g., due to a crash, it could end up in a limbo, never getting any
-	// updates from the leader. Therefore, it is crucial that the application ensures that any
-	// failure in snapshot sending is caught and reported back to the leader; so it can resume raft
-	// log probing in the follower.
+
+	// ReportSnapshot 报告某个节点的快照同步是否成功
 	ReportSnapshot(id uint64, status SnapshotStatus)
 	// Stop performs any necessary termination of the Node.
+	// 关闭节点
 	Stop()
 }
 
@@ -336,11 +269,8 @@ func (n *node) run() {
 	var readyc chan Ready
 	var advancec chan struct{}
 	var rd Ready
-
 	r := n.rn.raft
-
 	lead := None
-
 	for {
 		if advancec != nil {
 			// advance channel不为空，说明还在等应用调用Advance接口通知已经处理完毕了本次的ready数据

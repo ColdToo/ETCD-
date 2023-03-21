@@ -384,13 +384,14 @@ func (m *Snapshot) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Snapshot proto.InternalMessageInfo
 
-// Type：消息类型，宏观上分为请求和响应两大类（结尾带 Resp）；
-// 根据流程主线又可以分为日志同步、leader 选举、心跳广播、读请求四类；
 type Message struct {
+	//消息类型，宏观上分为请求和响应两大类（结尾带 Resp）；根据流程主线又可以分为日志同步、leader 选举、心跳广播、读请求四类；
 	Type MessageType `protobuf:"varint,1,opt,name=type,enum=raftpb.MessageType" json:"type"`
-	To   uint64      `protobuf:"varint,2,opt,name=to" json:"to"`
-	From uint64      `protobuf:"varint,3,opt,name=from" json:"from"`
-	//节点的任期
+	//该条信息发送给谁
+	To uint64 `protobuf:"varint,2,opt,name=to" json:"to"`
+	//这条消息来自哪
+	From uint64 `protobuf:"varint,3,opt,name=from" json:"from"`
+	//消息发送方的当前任期
 	Term uint64 `protobuf:"varint,4,opt,name=term" json:"term"`
 	// logTerm is generally used for appending Raft logs to followers. For example,
 	// (type=MsgApp,index=100,logTerm=5) means leader appends entries starting at
@@ -401,14 +402,16 @@ type Message struct {
 	//拟同步日志和前一条日志的标识
 	LogTerm uint64 `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
 	Index   uint64 `protobuf:"varint,6,opt,name=index" json:"index"`
-	//需要被其他节点认可的日志
+	//需要被其他节点认可的预写日志
 	Entries []Entry `protobuf:"bytes,7,rep,name=entries" json:"entries"`
 
-	//已提交索引的日志
-	Commit   uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"`
+	//消息发送方已提交索引的日志
+	Commit uint64 `protobuf:"varint,8,opt,name=commit" json:"commit"`
+
+	//日志同步时有可能以快照方式进行同步，如果以快照方式同步此时Entries内的数据为空
 	Snapshot Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
 
-	//节点是否拒绝同步日志，以及该节点上最后一条日志的索引
+	//节点是否拒绝同步日志，以及该节点上最后一条日志的索引,用于同步日志
 	Reject     bool   `protobuf:"varint,10,opt,name=reject" json:"reject"`
 	RejectHint uint64 `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
 	Context    []byte `protobuf:"bytes,12,opt,name=context" json:"context,omitempty"`
@@ -447,6 +450,7 @@ func (m *Message) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Message proto.InternalMessageInfo
 
+// 硬状态需要被持久化，包括：节点当前Term、Vote、Commit
 type HardState struct {
 	Term   uint64 `protobuf:"varint,1,opt,name=term" json:"term"`
 	Vote   uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"`

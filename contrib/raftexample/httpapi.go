@@ -47,11 +47,13 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// committed so a subsequent GET on the key may return old value
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == "GET":
+		// 直接从内存存储中找到值
 		if v, ok := h.store.Lookup(key); ok {
 			w.Write([]byte(v))
 		} else {
 			http.Error(w, "Failed to GET", http.StatusNotFound)
 		}
+		// 配置变更的接口
 	case r.Method == "POST":
 		url, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -75,7 +77,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.confChangeC <- cc
 
 		// As above, optimistic that raft will apply the conf change
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusNoContent) //
 	case r.Method == "DELETE":
 		nodeId, err := strconv.ParseUint(key[1:], 0, 64)
 		if err != nil {

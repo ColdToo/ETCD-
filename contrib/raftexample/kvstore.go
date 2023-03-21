@@ -26,8 +26,8 @@ import (
 )
 
 // a key-value store backed by raft
-// kvstore 是一个乞丐版的键值对存储模块
-// 模拟还原 etcd 存储系统与 raft 节点间的交互模式.
+// kvstore 是一个乞丐版的键值对存储模块，数据只是通过一个map结构简单的存储在内存中，
+// 可以通过snapshotter持久化，我们可以自定义一个存储代替该存储
 type kvstore struct {
 	proposeC    chan<- string // channel for proposing updates
 	mu          sync.RWMutex
@@ -57,6 +57,7 @@ func newKVStore(snapshotter *snap.Snapshotter, proposeC chan<- string, commitC <
 	return s
 }
 
+// 根据key返回val
 func (s *kvstore) Lookup(key string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -64,6 +65,7 @@ func (s *kvstore) Lookup(key string) (string, bool) {
 	return v, ok
 }
 
+// 提议一个key-val
 func (s *kvstore) Propose(k string, v string) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(kv{k, v}); err != nil {
@@ -72,10 +74,11 @@ func (s *kvstore) Propose(k string, v string) {
 	s.proposeC <- buf.String()
 }
 
+// 读取commitC管道，该管道是可以提交的Entry，需要持久化到内存中
 func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
 	for commit := range commitC {
 		if commit == nil {
-			// signaled to load snapshot
+			// 当commit == nil时代表此时从从快照中恢复内存数据
 			snapshot, err := s.loadSnapshot()
 			if err != nil {
 				log.Panic(err)
@@ -99,6 +102,7 @@ func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
 			s.kvStore[dataKv.Key] = dataKv.Val
 			s.mu.Unlock()
 		}
+		//通过chanel传达消息，表示该Entry已经持久化
 		close(commit.applyDoneC)
 	}
 	if err, ok := <-errorC; ok {
@@ -106,12 +110,14 @@ func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
 	}
 }
 
+// 获取当前内存快照
 func (s *kvstore) getSnapshot() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return json.Marshal(s.kvStore)
 }
 
+// 加载快照
 func (s *kvstore) loadSnapshot() (*raftpb.Snapshot, error) {
 	snapshot, err := s.snapshotter.Load()
 	if err == snap.ErrNoSnapshot {
@@ -123,6 +129,7 @@ func (s *kvstore) loadSnapshot() (*raftpb.Snapshot, error) {
 	return snapshot, nil
 }
 
+// 根据快照恢复内存数据
 func (s *kvstore) recoverFromSnapshot(snapshot []byte) error {
 	var store map[string]string
 	if err := json.Unmarshal(snapshot, &store); err != nil {
